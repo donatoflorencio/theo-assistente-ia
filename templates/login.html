@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Theo</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #111827;
+            font-family: Arial, sans-serif;
+            color: white;
+            padding: 20px;
+        }
+
+        .login {
+            width: 100%;
+            max-width: 380px;
+            padding: 30px;
+            background: #1f2937;
+            border-radius: 14px;
+            text-align: center;
+        }
+
+        h1 {
+            margin-top: 0;
+        }
+
+        input,
+        button {
+            width: 100%;
+            padding: 14px;
+            margin-top: 15px;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        input {
+            border: 1px solid #4b5563;
+            background: #111827;
+            color: white;
+        }
+
+        button {
+            border: none;
+            background: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+        }
+
+        #erro {
+            color: #f87171;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <main class="login">
+        <h1>Minha IA</h1>
+        <p>Digite sua senha para continuar.</p>
+
+        <form id="formLogin">
+            <input type="password" id="senha" placeholder="Sua senha" autocomplete="current-password" required>
+
+            <button type="submit" id="entrar">
+                Entrar
+            </button>
+        </form>
+
+        <p id="erro"></p>
+    </main>
+
+    <script>
+        const form = document.getElementById("formLogin");
+        const senha = document.getElementById("senha");
+        const entrar = document.getElementById("entrar");
+        const erro = document.getElementById("erro");
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            entrar.disabled = true;
+            entrar.textContent = "Verificando...";
+            erro.textContent = "";
+
+            try {
+                const resposta = await fetch("/login", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        password: senha.value
+                    })
+                });
+
+                const dados = await resposta.json();
+
+                if (!resposta.ok) {
+                    throw new Error(dados.error || "Falha no login.");
+                }
+
+                window.location.href = "/";
+
+            } catch (erroLogin) {
+                erro.textContent = erroLogin.message;
+            } finally {
+                entrar.disabled = false;
+                entrar.textContent = "Entrar";
+            }
+        });
+    </script>
+
+</body>
+
+</html>

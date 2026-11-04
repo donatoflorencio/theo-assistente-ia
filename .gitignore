@@ -1,0 +1,23 @@
+# Ambiente virtual
+ambiente/
+
+# Credenciais e configurações
+.env
+.env.*
+!.env.example
+
+# Banco de dados e memórias
+*.db
+*.sqlite
+*.sqlite3
+
+# Backups
+*_backup.py
+*backup*.py
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Arquivos temporários
+*.log

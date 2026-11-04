@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TheoIA</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <main class="container">
+        <header>
+            <h1>Theo</h1>
+            <p>Theo · Assistente pessoal</p>
+            <button type="button" id="novaConversa">
+                Nova conversa
+            </button>
+        </header>
+
+        <section id="chat">
+            <div class="message bot">
+                Olá! Como posso ajudar?
+            </div>
+        </section>
+
+        <form id="form">
+            <input type="text" id="pergunta" placeholder="Digite sua mensagem..." autocomplete="off" required>
+            <button type="submit" id="enviar">Enviar</button>
+        </form>
+    </main>
+
+    <script>
+        const form = document.getElementById("form");
+        const chat = document.getElementById("chat");
+        const pergunta = document.getElementById("pergunta");
+        const enviar = document.getElementById("enviar");
+        const novaConversa = document.getElementById("novaConversa");
+
+        // Identificador compatível com navegadores móveis
+        function gerarId() {
+            if (window.crypto && crypto.randomUUID) {
+                return crypto.randomUUID();
+            }
+
+            return "conversa-" + Date.now() + "-" +
+                Math.random().toString(36).substring(2, 10);
+        }
+
+        let conversaId = gerarId();
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            const texto = pergunta.value.trim();
+
+            if (!texto || enviar.disabled) return;
+
+            adicionarMensagem(texto, "user");
+
+            pergunta.value = "";
+            enviar.disabled = true;
+
+            const carregando = adicionarMensagem(
+                "Pensando...",
+                "bot"
+            );
+
+            try {
+                const resposta = await fetch("/chat", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        message: texto,
+                        conversation_id: conversaId
+                    })
+                });
+
+                const dados = await resposta.json();
+
+                if (!resposta.ok) {
+                    throw new Error(
+                        dados.error || "Erro no servidor"
+                    );
+                }
+
+                carregando.textContent = dados.response;
+
+            } catch (erro) {
+                carregando.textContent =
+                    "Não foi possível enviar: " + erro.message;
+            } finally {
+                enviar.disabled = false;
+                pergunta.focus();
+            }
+        });
+
+        novaConversa.addEventListener("click", () => {
+            conversaId = gerarId();
+            chat.innerHTML = "";
+
+            adicionarMensagem(
+                "Nova conversa iniciada. Como posso ajudar?",
+                "bot"
+            );
+
+            pergunta.focus();
+        });
+
+        function adicionarMensagem(texto, tipo) {
+            const div = document.createElement("div");
+
+            div.className = "message " + tipo;
+            div.textContent = texto;
+
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+
+            return div;
+        }
+    </script>
+</body>
+
+</html>
