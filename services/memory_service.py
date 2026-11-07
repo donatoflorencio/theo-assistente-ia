@@ -10,7 +10,6 @@ from services.memory_service import (
     apagar_memoria,
     atualizar_memoria,
     buscar_memorias_relacionadas,
-    buscar_memorias_relevantes,
     identificar_memoria,
     listar_memorias,
     memoria_ja_existe,
@@ -233,4 +232,3 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
-

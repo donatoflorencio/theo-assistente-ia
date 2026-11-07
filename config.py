@@ -7,8 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class Config:
-    SECRET_KEY = os.getenv("IA_SECRET_KEY")
-    IA_PASSWORD = os.getenv("IA_PASSWORD")
+    SECRET_KEY = os.getenv("IA_SECRET_KEY", "dev-secret-key")
+    IA_PASSWORD = os.getenv("IA_PASSWORD", "dev-password")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     DB_PATH = BASE_DIR / "memoria.db"

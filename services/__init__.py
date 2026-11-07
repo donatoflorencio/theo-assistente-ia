@@ -24,6 +24,9 @@ Não invente informações sobre o usuário.
 Se não souber algo, seja transparente.
 """
 
+if not Config.GEMINI_API_KEY:
+    raise RuntimeError("GEMINI_API_KEY não configurada.")
+
 client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
 

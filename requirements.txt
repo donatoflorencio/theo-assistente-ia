@@ -1,68 +1,60 @@
-from __future__ import annotations
+# Theo Assistente IA
 
-from google import genai
-from google.genai import types
+Assistente pessoal de inteligência artificial em Python com Flask e Gemini.
 
-from config import Config
-from services.memory_service import buscar_memorias_relevantes, carregar_historico
+## Visão geral
 
-INSTRUCAO_SISTEMA = """
-Seu nome é Theo.
+Este projeto oferece uma interface web simples para conversar com uma IA pessoal, guardar memórias e manter contexto por conversa.
 
-Você é um assistente pessoal de inteligência artificial.
-Converse sempre em português brasileiro.
+## Requisitos
 
-Seja educado, objetivo e profissional.
-Explique assuntos técnicos de maneira didática.
-Ao ensinar programação, avance passo a passo,
-considerando que o usuário está aprendendo.
+- Python 3.10+
+- Conta Google Gemini com chave de API
 
-Você pode utilizar as informações de memória
-fornecidas no contexto para personalizar suas respostas.
+## Configuração
 
-Não invente informações sobre o usuário.
-Se não souber algo, seja transparente.
-"""
+1. Crie um ambiente virtual e instale dependências:
 
-client = genai.Client(api_key=Config.GEMINI_API_KEY)
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
+2. Defina as variáveis de ambiente:
 
-def gerar_resposta(pergunta, conversa_id):
-    historico = carregar_historico(conversa_id)
-    memorias_relevantes = buscar_memorias_relevantes(pergunta)
+```bash
+export IA_SECRET_KEY="sua-chave-secreta"
+export IA_PASSWORD="sua-senha"
+export GEMINI_API_KEY="sua-chave-do-gemini"
+export GEMINI_MODEL="gemini-3.5-flash-lite"
+```
 
-    contexto_memorias = ""
-    if memorias_relevantes:
-        contexto_memorias = "\n\nInformações importantes sobre o usuário:\n"
-        for memoria in memorias_relevantes:
-            contexto_memorias += f"- {memoria['conteudo']}\n"
+## Execução
 
-    conteudos = []
-    for mensagem in historico:
-        papel = "model" if mensagem["role"] == "assistant" else "user"
-        conteudos.append(
-            types.Content(role=papel, parts=[types.Part(text=mensagem["content"])])
-        )
+```bash
+python app.py
+```
 
-    conteudos.append(
-        types.Content(
-            role="user",
-            parts=[types.Part(text=contexto_memorias + pergunta)],
-        )
-    )
+A aplicação ficará disponível em:
 
-    resposta = client.models.generate_content(
-        model=Config.GEMINI_MODEL,
-        contents=conteudos,
-        config=types.GenerateContentConfig(
-            system_instruction=INSTRUCAO_SISTEMA,
-            temperature=0.7,
-            max_output_tokens=1000,
-        ),
-    )
+```text
+http://127.0.0.1:5000
+```
 
-    texto_resposta = resposta.text
-    if not texto_resposta:
-        raise RuntimeError("O Gemini não retornou texto.")
+## Estrutura
 
-    return texto_resposta
+- `app.py`: aplicação Flask
+- `config.py`: configurações e ambiente
+- `db.py`: banco SQLite
+- `services/`: integração com Gemini e memória
+- `templates/`: páginas HTML
+- `static/`: CSS
+
+## Melhorias futuras
+
+- separar autenticação e chat em rotas maiores
+- aumentar a robustez do sistema de memória
+- criar uma política clara de armazenamento
+- expandir testes automatizados
+
