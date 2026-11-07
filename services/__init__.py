@@ -1,5 +1,1 @@
-Flask>=3.0.0
-google-genai>=1.0.0
-pytest>=8.0.0
-python-dotenv>=1.0.0
-
+"""Serviços de memória e integração com o Gemini."""

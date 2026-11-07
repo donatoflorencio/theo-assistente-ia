@@ -1,30 +1,19 @@
-from app import create_app
+from services.memory_service import (
+    buscar_memorias_relevantes, identificar_memoria, pode_salvar_memoria, salvar_memoria,
+)
 
 
-def test_login_success():
-    app = create_app()
-    client = app.test_client()
-
-    response = client.post("/login", json={"password": "dev-password"})
-
-    assert response.status_code == 200
-    assert response.get_json()["success"] is True
+def test_identificar_memoria():
+    assert identificar_memoria("Meu nome é Ana e estou estudando Python.")
 
 
-def test_login_invalid_password():
-    app = create_app()
-    client = app.test_client()
-
-    response = client.post("/login", json={"password": "senha-errada"})
-
-    assert response.status_code == 401
-    assert "error" in response.get_json()
+def test_memory_save_policy():
+    assert pode_salvar_memoria("Meu nome é Ana e estou estudando Python.")
+    assert not pode_salvar_memoria("sim")
+    assert not pode_salvar_memoria("!!!")
 
 
-def test_home_requires_login():
-    app = create_app()
-    client = app.test_client()
-
-    response = client.get("/")
-    assert response.status_code == 200
-    assert b"Digite sua senha" in response.data
+def test_relevant_memory_search():
+    assert salvar_memoria("geral", "Estou estudando Python e quero aprender Flask.")
+    result = buscar_memorias_relevantes("quero aprender Python")
+    assert any("Python" in item["conteudo"] for item in result)

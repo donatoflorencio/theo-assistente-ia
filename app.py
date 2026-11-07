@@ -1,294 +1,137 @@
-import difflib
-import re
-import sqlite3
-import unicodedata
+from functools import wraps
+import secrets
 
-from db import get_connection
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-
-def pode_salvar_memoria(conteudo):
-    texto = (conteudo or "").strip()
-    if not texto:
-        return False
-
-    if len(texto) < 8 or len(texto) > 280:
-        return False
-
-    if len(set(texto)) <= 3:
-        return False
-
-    if texto.lower() in {"sim", "não", "nao", "ok", "okay"}:
-        return False
-
-    if re.fullmatch(r"[\W_]+", texto):
-        return False
-
-    indicativos = [
-        "meu",
-        "minha",
-        "eu",
-        "gosto",
-        "prefiro",
-        "estou",
-        "quero",
-        "pretendo",
-        "trabalho",
-        "nome",
-        "aprendo",
-        "estudo",
-        "projeto",
-    ]
-
-    return any(indicativo in texto.lower() for indicativo in indicativos)
+from config import Config
+from db import inicializar_banco
+from services.gemini_service import gerar_resposta
+from services.memory_service import (
+    apagar_memoria, atualizar_memoria, buscar_memorias_relacionadas,
+    identificar_memoria, listar_memorias, memoria_ja_existe,
+    pode_salvar_memoria, salvar_memoria, salvar_mensagens,
+)
 
 
-def carregar_historico(conversa_id):
-    with get_connection() as conexao:
-        registros = conexao.execute(
-            """
-            SELECT role, content
-            FROM mensagens
-            WHERE conversation_id = ?
-            ORDER BY id DESC
-            LIMIT 10
-            """,
-            (conversa_id,),
-        ).fetchall()
-
-    registros.reverse()
-    return [{"role": role, "content": content} for role, content in registros]
-
-
-def salvar_mensagens(conversa_id, pergunta, resposta):
-    with get_connection() as conexao:
-        conexao.executemany(
-            """
-            INSERT INTO mensagens (conversation_id, role, content)
-            VALUES (?, ?, ?)
-            """,
-            [(conversa_id, "user", pergunta), (conversa_id, "assistant", resposta)],
-        )
-
-
-def salvar_memoria(categoria, conteudo):
-    if not pode_salvar_memoria(conteudo):
-        return False
-
-    with get_connection() as conexao:
-        conexao.execute(
-            """
-            INSERT INTO memorias (categoria, conteudo)
-            VALUES (?, ?)
-            """,
-            (categoria, conteudo),
-        )
-
-    return True
-
-
-def atualizar_memoria(memoria_id, novo_conteudo):
-    with get_connection() as conexao:
-        conexao.execute(
-            """
-            UPDATE memorias
-            SET conteudo = ?
-            WHERE id = ?
-            """,
-            (novo_conteudo, memoria_id),
-        )
-
-
-def buscar_memoria_por_categoria(categoria):
-    with get_connection() as conexao:
-        conexao.row_factory = sqlite3.Row
-
-        resultado = conexao.execute(
-            """
-            SELECT * FROM memorias
-            WHERE categoria = ?
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (categoria,),
-        ).fetchone()
-
-        return dict(resultado) if resultado else None
-
-
-def identificar_tema_memoria(texto):
-    texto = texto.lower()
-
-    temas = {
-        "estudos": [
-            "estud",
-            "aprend",
-            "curso",
-            "python",
-            "javascript",
-            "html",
-            "css",
-            "programação",
-            "desenvolvimento",
-        ],
-        "trabalho": ["trabalho", "empresa", "profissão", "emprego", "cargo"],
-        "projetos": ["projeto", "desenvolvendo", "criando", "construindo"],
-        "preferencias": ["prefiro", "gosto", "não gosto", "preferência"],
-        "objetivos": ["objetivo", "pretendo", "quero me tornar", "quero trabalhar"],
-    }
-
-    encontrados = []
-    for tema, palavras in temas.items():
-        if any(palavra in texto for palavra in palavras):
-            encontrados.append(tema)
-
-    return encontrados
-
-
-def buscar_memorias_relacionadas(texto):
-    temas_novos = identificar_tema_memoria(texto)
-    if not temas_novos:
-        return []
-
-    memorias = listar_memorias()
-    relacionadas = []
-
-    for memoria in memorias:
-        temas_existentes = identificar_tema_memoria(memoria["conteudo"])
-        if any(tema in temas_existentes for tema in temas_novos):
-            relacionadas.append(memoria)
-
-    return relacionadas
-
-
-def listar_memorias():
-    with get_connection() as conexao:
-        conexao.row_factory = sqlite3.Row
-        memorias = conexao.execute(
-            """
-            SELECT id, categoria, conteudo, criado_em
-            FROM memorias
-            ORDER BY id DESC
-            """
-        ).fetchall()
-        return [dict(memoria) for memoria in memorias]
-
-
-def normalizar_texto_memoria(texto):
-    texto = texto.casefold().strip()
-    texto = unicodedata.normalize("NFKD", texto)
-    texto = "".join(
-        caractere for caractere in texto if not unicodedata.combining(caractere)
+def create_app(test_config=None):
+    Config.validate()
+    app = Flask(__name__)
+    app.secret_key = Config.SECRET_KEY
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE=Config.SESSION_COOKIE_SAMESITE,
+        SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE,
     )
-    texto = re.sub(r"[^\w\s]", "", texto)
-    texto = re.sub(r"\s+", " ", texto)
-    return texto
+    if test_config:
+        app.config.update(test_config)
+    inicializar_banco()
+
+    def exige_login(funcao):
+        @wraps(funcao)
+        def verificar(*args, **kwargs):
+            if not session.get("autenticado"):
+                return jsonify({"error": "Acesso não autorizado."}), 401
+            return funcao(*args, **kwargs)
+        return verificar
+
+    @app.get("/")
+    def inicio():
+        return render_template("index.html" if session.get("autenticado") else "login.html")
+
+    @app.post("/login")
+    def login():
+        dados = request.get_json(silent=True) or {}
+        senha = dados.get("password", "")
+        if not isinstance(senha, str) or not secrets.compare_digest(senha, Config.IA_PASSWORD):
+            return jsonify({"error": "Senha incorreta."}), 401
+        session.clear()
+        session["autenticado"] = True
+        return jsonify({"success": True})
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("inicio"))
+
+    @app.post("/chat")
+    @exige_login
+    def chat():
+        dados = request.get_json(silent=True) or {}
+        pergunta = dados.get("message", "")
+        conversa_id = dados.get("conversation_id", "principal")
+        if not isinstance(pergunta, str) or not pergunta.strip():
+            return jsonify({"error": "Mensagem vazia."}), 400
+        pergunta = pergunta.strip()
+        if not isinstance(conversa_id, str) or not conversa_id.strip() or len(conversa_id) > 100:
+            return jsonify({"error": "Identificador de conversa inválido."}), 400
+
+        try:
+            lower = pergunta.casefold()
+            if lower.startswith("theo, lembre-se:"):
+                conteudo = pergunta[len("theo, lembre-se:"):].strip()
+                if not pode_salvar_memoria(conteudo):
+                    return jsonify({"response": "Essa informação não parece adequada para memória de longo prazo."})
+                salvar_memoria("geral", conteudo)
+                return jsonify({"response": "Informação salva na minha memória de longo prazo."})
+
+            if lower.startswith("theo, atualize a memória "):
+                partes = pergunta[len("theo, atualize a memória "):].split(":", 1)
+                if len(partes) != 2 or not partes[0].strip().isdigit() or not partes[1].strip():
+                    return jsonify({"response": "Use: Theo, atualize a memória 1: novo conteúdo."})
+                memoria_id = int(partes[0].strip())
+                if not any(m["id"] == memoria_id for m in listar_memorias()):
+                    return jsonify({"response": "Não encontrei essa memória."})
+                atualizar_memoria(memoria_id, partes[1].strip())
+                return jsonify({"response": f"Memória {memoria_id} atualizada."})
+
+            if lower.rstrip(" ?!") in ("theo, quais são minhas memórias", "quais são minhas memórias"):
+                memorias = listar_memorias()
+                texto = "Ainda não tenho memórias salvas." if not memorias else "Estas são minhas memórias:\n\n" + "".join(
+                    f"Memória {m['id']} ({m['categoria']}): {m['conteudo']}\n\n" for m in memorias
+                )
+                return jsonify({"response": texto})
+
+            if lower.startswith("theo, esqueça a memória "):
+                identificador = pergunta[len("theo, esqueça a memória "):].strip()
+                if not identificador.isdigit():
+                    return jsonify({"response": "Informe o número da memória que deseja apagar."})
+                apagar_memoria(int(identificador))
+                return jsonify({"response": "Solicitação de exclusão processada."})
+
+            if lower in ("cancelar", "não", "nao", "cancelar operação", "cancelar operacao"):
+                for chave in ("memoria_pendente", "memorias_relacionadas", "memoria_id_complementar"):
+                    session.pop(chave, None)
+                return jsonify({"response": "Operação cancelada. Nenhuma memória foi alterada."})
+
+            if lower in ("sim", "sim, pode salvar", "pode salvar", "salve"):
+                pendente = session.get("memoria_pendente")
+                if pendente and pode_salvar_memoria(pendente):
+                    salvar_memoria("geral", pendente)
+                    session.pop("memoria_pendente", None)
+                    return jsonify({"response": "Informação salva na minha memória."})
+
+            if identificar_memoria(pergunta):
+                if memoria_ja_existe(pergunta):
+                    return jsonify({"response": "Essa informação já está registrada na minha memória."})
+                relacionadas = buscar_memorias_relacionadas(pergunta)
+                session["memoria_pendente"] = pergunta
+                if relacionadas:
+                    session["memorias_relacionadas"] = [m["id"] for m in relacionadas]
+                    lista = "\n".join(f"Memória {m['id']}: {m['conteudo']}" for m in relacionadas)
+                    return jsonify({"response": f"Encontrei memórias relacionadas:\n\n{lista}\n\nDeseja complementar ou salvar como nova memória?"})
+                return jsonify({"response": "Essa informação pode ser útil. Deseja que eu salve na memória?", "sugerir_memoria": pergunta})
+
+            resposta = gerar_resposta(pergunta, conversa_id)
+            salvar_mensagens(conversa_id, pergunta, resposta)
+            return jsonify({"response": resposta})
+        except Exception:
+            app.logger.exception("Falha ao processar mensagem de chat")
+            return jsonify({"error": "Não foi possível processar sua mensagem."}), 500
+
+    return app
 
 
-def memoria_ja_existe(conteudo):
-    novo_conteudo = normalizar_texto_memoria(conteudo)
+app = create_app()
 
-    if not novo_conteudo:
-        return False
-
-    for memoria in listar_memorias():
-        conteudo_salvo = normalizar_texto_memoria(memoria["conteudo"])
-
-        if novo_conteudo == conteudo_salvo:
-            return True
-
-        similaridade = difflib.SequenceMatcher(
-            None,
-            novo_conteudo,
-            conteudo_salvo,
-        ).ratio()
-
-        if similaridade >= 0.85:
-            return True
-
-    return False
-
-
-def buscar_memorias_relevantes(pergunta):
-    pergunta = pergunta.casefold()
-
-    palavras_chave = {
-        "nome": ["nome", "chamo", "chamar"],
-        "estudo": ["estudo", "estudando", "estudar", "aprendendo", "aprendo"],
-        "programacao": [
-            "programacao",
-            "programação",
-            "python",
-            "javascript",
-            "html",
-            "css",
-        ],
-    }
-
-    termos_relevantes = []
-    for palavras in palavras_chave.values():
-        if any(palavra in pergunta for palavra in palavras):
-            termos_relevantes.extend(palavras)
-
-    if not termos_relevantes:
-        return []
-
-    memorias = listar_memorias()
-    relevantes = []
-
-    for memoria in memorias:
-        conteudo = memoria["conteudo"].casefold()
-        pontuacao = sum(1 for termo in set(termos_relevantes) if termo in conteudo)
-
-        if pontuacao > 0:
-            relevantes.append((pontuacao, memoria))
-
-    relevantes.sort(key=lambda item: item[0], reverse=True)
-    return [memoria for _, memoria in relevantes[:5]]
-
-
-def identificar_memoria(pergunta):
-    pergunta = pergunta.lower().strip()
-
-    indicadores = [
-        "estou estudando",
-        "estou aprendendo",
-        "quero aprender",
-        "estou fazendo um curso",
-        "estou estudando para",
-        "eu gosto de",
-        "eu prefiro",
-        "não gosto de",
-        "minha preferência é",
-        "prefiro utilizar",
-        "meu objetivo é",
-        "meu sonho é",
-        "pretendo",
-        "quero trabalhar com",
-        "quero me tornar",
-        "estou trabalhando",
-        "eu trabalho com",
-        "minha profissão é",
-        "trabalho na empresa",
-        "minha função é",
-        "meu projeto é",
-        "estou desenvolvendo",
-        "estou criando",
-        "estou construindo",
-        "estou trabalhando no projeto",
-        "meu nome é",
-        "moro em",
-        "tenho interesse em",
-    ]
-
-    return any(indicador in pergunta for indicador in indicadores)
-
-
-def apagar_memoria(memoria_id):
-    with get_connection() as conexao:
-        conexao.execute(
-            """
-            DELETE FROM memorias
-            WHERE id = ?
-            """,
-            (memoria_id,),
-        )
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000, debug=False)
