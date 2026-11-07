@@ -1,60 +1,254 @@
-# Theo Assistente IA
+from functools import wraps
+import secrets
 
-Assistente pessoal de inteligência artificial em Python com Flask e Gemini.
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
-## Visão geral
+from config import Config
+from db import inicializar_banco
+from services.gemini_service import gerar_resposta
+from services.memory_service import (
+    apagar_memoria,
+    atualizar_memoria,
+    buscar_memorias_relacionadas,
+    identificar_memoria,
+    listar_memorias,
+    memoria_ja_existe,
+    pode_salvar_memoria,
+    salvar_memoria,
+    salvar_mensagens,
+)
 
-Este projeto oferece uma interface web simples para conversar com uma IA pessoal, guardar memórias e manter contexto por conversa.
 
-## Requisitos
+def create_app(test_config=None):
+    app = Flask(__name__)
+    app.secret_key = Config.SECRET_KEY
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE=Config.SESSION_COOKIE_SAMESITE,
+        SESSION_COOKIE_SECURE=Config.SESSION_COOKIE_SECURE,
+        JSON_SORT_KEYS=False,
+    )
 
-- Python 3.10+
-- Conta Google Gemini com chave de API
+    if test_config:
+        app.config.update(test_config)
 
-## Configuração
+    inicializar_banco()
 
-1. Crie um ambiente virtual e instale dependências:
+    def exige_login(funcao):
+        @wraps(funcao)
+        def verificar(*args, **kwargs):
+            if not session.get("autenticado"):
+                return jsonify({"error": "Acesso não autorizado."}), 401
+            return funcao(*args, **kwargs)
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+        return verificar
 
-2. Defina as variáveis de ambiente:
+    @app.route("/", methods=["GET"])
+    def inicio():
+        if session.get("autenticado"):
+            return render_template("index.html")
+        return render_template("login.html")
 
-```bash
-export IA_SECRET_KEY="sua-chave-secreta"
-export IA_PASSWORD="sua-senha"
-export GEMINI_API_KEY="sua-chave-do-gemini"
-export GEMINI_MODEL="gemini-3.5-flash-lite"
-```
+    @app.route("/login", methods=["POST"])
+    def login():
+        dados = request.get_json(silent=True) or {}
+        senha = dados.get("password", "")
 
-## Execução
+        if not secrets.compare_digest(senha, Config.IA_PASSWORD):
+            return jsonify({"error": "Senha incorreta."}), 401
 
-```bash
-python app.py
-```
+        session["autenticado"] = True
+        return jsonify({"success": True})
 
-A aplicação ficará disponível em:
+    @app.route("/logout", methods=["POST"])
+    def logout():
+        session.clear()
+        return redirect(url_for("inicio"))
 
-```text
-http://127.0.0.1:5000
-```
+    @app.route("/chat", methods=["POST"])
+    @exige_login
+    def chat():
+        dados = request.get_json(silent=True) or {}
+        pergunta = dados.get("message", "").strip()
+        conversa_id = dados.get("conversation_id", "principal")
 
-## Estrutura
+        if not pergunta:
+            return jsonify({"error": "Mensagem vazia."}), 400
 
-- `app.py`: aplicação Flask
-- `config.py`: configurações e ambiente
-- `db.py`: banco SQLite
-- `services/`: integração com Gemini e memória
-- `templates/`: páginas HTML
-- `static/`: CSS
+        try:
+            prefixo = "theo, lembre-se:"
+            if pergunta.lower().startswith(prefixo):
+                conteudo = pergunta[len(prefixo):].strip()
+                if not conteudo:
+                    return jsonify({"response": "Informe o que devo guardar."})
+                if not pode_salvar_memoria(conteudo):
+                    return jsonify({"response": "Essa informação não parece adequada para memória de longo prazo."})
+                salvar_memoria("geral", conteudo)
+                return jsonify({"response": "Informação salva na minha memória de longo prazo."})
 
-## Melhorias futuras
+            prefixo_atualizar = "theo, atualize a memória "
+            if pergunta.lower().startswith(prefixo_atualizar):
+                dados_memoria = pergunta[len(prefixo_atualizar):].split(":", 1)
+                if len(dados_memoria) != 2 or not dados_memoria[0].strip().isdigit():
+                    return jsonify({"response": "Use: Theo, atualize a memória 1: novo conteúdo."})
 
-- separar autenticação e chat em rotas maiores
-- aumentar a robustez do sistema de memória
-- criar uma política clara de armazenamento
-- expandir testes automatizados
+                memoria_id = int(dados_memoria[0].strip())
+                novo_conteudo = dados_memoria[1].strip()
 
+                if not novo_conteudo:
+                    return jsonify({"response": "Informe o novo conteúdo."})
+
+                if not any(memoria["id"] == memoria_id for memoria in listar_memorias()):
+                    return jsonify({"response": "Não encontrei essa memória."})
+
+                atualizar_memoria(memoria_id, novo_conteudo)
+                return jsonify({"response": f"Memória {memoria_id} atualizada."})
+
+            if pergunta.lower().strip() in ["sim", "sim, pode complementar", "pode complementar"]:
+                memoria_id = session.get("memoria_id_complementar")
+                memoria_pendente = session.get("memoria_pendente")
+
+                if memoria_id and memoria_pendente:
+                    memoria = next((m for m in listar_memorias() if m["id"] == memoria_id), None)
+                    if memoria:
+                        novo_conteudo = memoria["conteudo"] + " " + memoria_pendente
+                        atualizar_memoria(memoria_id, novo_conteudo)
+                        session.pop("memoria_id_complementar", None)
+                        session.pop("memoria_pendente", None)
+                        session.pop("memorias_relacionadas", None)
+                        return jsonify({"response": "Memória complementada com sucesso."})
+
+            if pergunta.lower().strip() in [
+                "salvar como nova memória",
+                "salvar como nova memoria",
+                "nova memória",
+                "nova memoria",
+            ]:
+                memoria_pendente = session.get("memoria_pendente")
+                if memoria_pendente:
+                    if memoria_ja_existe(memoria_pendente):
+                        session.pop("memoria_pendente", None)
+                        session.pop("memorias_relacionadas", None)
+                        session.pop("memoria_id_complementar", None)
+                        return jsonify({"response": "Essa informação já está registrada na minha memória."})
+
+                    if not pode_salvar_memoria(memoria_pendente):
+                        session.pop("memoria_pendente", None)
+                        session.pop("memorias_relacionadas", None)
+                        session.pop("memoria_id_complementar", None)
+                        return jsonify({"response": "Essa informação não possui referência útil para ser salva."})
+
+                    salvar_memoria("geral", memoria_pendente)
+                    session.pop("memoria_pendente", None)
+                    session.pop("memorias_relacionadas", None)
+                    session.pop("memoria_id_complementar", None)
+                    return jsonify({"response": "Nova memória salva com sucesso."})
+
+            if pergunta.lower().strip() in [
+                "sim",
+                "sim, pode salvar",
+                "pode salvar",
+                "salve",
+            ]:
+                memoria_pendente = session.get("memoria_pendente")
+                if memoria_pendente:
+                    if not pode_salvar_memoria(memoria_pendente):
+                        session.pop("memoria_pendente", None)
+                        return jsonify({"response": "Essa informação não parece adequada para memória de longo prazo."})
+                    salvar_memoria("geral", memoria_pendente)
+                    session.pop("memoria_pendente", None)
+                    return jsonify({"response": "Informação salva na minha memória."})
+
+            if pergunta.lower().strip() in ["cancelar", "cancelar operação", "cancelar operacao", "não", "nao"]:
+                session.pop("memoria_pendente", None)
+                session.pop("memorias_relacionadas", None)
+                session.pop("memoria_id_complementar", None)
+                return jsonify({"response": "Operação cancelada. Nenhuma memória foi alterada."})
+
+            if pergunta.lower().startswith("complementar a memória"):
+                import re as regex
+
+                resultado = regex.search(r"memória\s+(\d+)", pergunta.lower())
+                if resultado:
+                    memoria_id = int(resultado.group(1))
+                    memorias_relacionadas = session.get("memorias_relacionadas", [])
+
+                    if memoria_id not in memorias_relacionadas:
+                        return jsonify({"response": "Esse número não corresponde a uma memória relacionada."})
+
+                    session["memoria_id_complementar"] = memoria_id
+                    return jsonify({
+                        "response": (
+                            f"Você escolheu complementar a memória {memoria_id}. "
+                            "Deseja acrescentar a informação que acabou de enviar?"
+                        )
+                    })
+
+            if pergunta.lower().rstrip(" ?!") in ["theo, quais são minhas memórias", "quais são minhas memórias"]:
+                memorias = listar_memorias()
+                if not memorias:
+                    texto = "Ainda não tenho memórias salvas."
+                else:
+                    texto = "Estas são minhas memórias:\n\n"
+                    for memoria in memorias:
+                        texto += f"**Memória {memoria['id']}** ({memoria['categoria']}): {memoria['conteudo']}\n\n"
+                return jsonify({"response": texto})
+
+            prefixo_apagar = "theo, esqueça a memória "
+            if pergunta.lower().startswith(prefixo_apagar):
+                identificador = pergunta[len(prefixo_apagar):].strip()
+                if not identificador.isdigit():
+                    return jsonify({"response": "Informe o número da memória que deseja apagar."})
+
+                memoria_id = int(identificador)
+                apagar_memoria(memoria_id)
+                return jsonify({"response": f"Solicitação de exclusão da memória {memoria_id} processada."})
+
+            if identificar_memoria(pergunta):
+                memoria_ja_salva = memoria_ja_existe(pergunta)
+                if memoria_ja_salva:
+                    return jsonify({"response": "Essa informação já está registrada na minha memória."})
+
+                relacionadas = buscar_memorias_relacionadas(pergunta)
+                if relacionadas:
+                    session["memoria_pendente"] = pergunta
+                    session["memorias_relacionadas"] = [memoria["id"] for memoria in relacionadas]
+                    session["memoria_id_complementar"] = None
+
+                    lista = "\n".join(
+                        f"Memória {memoria['id']}: {memoria['conteudo']}" for memoria in relacionadas
+                    )
+
+                    return jsonify({
+                        "response": (
+                            "Encontrei memórias sobre assuntos relacionados:\n\n"
+                            f"{lista}\n\n"
+                            "Deseja complementar essas informações ou salvar como uma nova memória?"
+                        )
+                    })
+
+                session["memoria_pendente"] = pergunta
+                return jsonify({
+                    "response": (
+                        "Essa informação pode ser útil nas próximas conversas. "
+                        "Deseja que eu salve isso na minha memória?"
+                    ),
+                    "sugerir_memoria": pergunta,
+                })
+
+            resposta = gerar_resposta(pergunta, conversa_id)
+            salvar_mensagens(conversa_id, pergunta, resposta)
+            return jsonify({"response": resposta})
+
+        except Exception as erro:
+            print("Erro no chat:", str(erro))
+            return jsonify({"error": "Não foi possível processar sua mensagem."}), 500
+
+    return app
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)

@@ -3,7 +3,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    def load_dotenv() -> bool:
+        return False
+
+
 BASE_DIR = Path(__file__).resolve().parent
+if not load_dotenv(BASE_DIR / ".env"):
+    # Ignore if .env is absent; the app still works with exported environment variables.
+    pass
 
 
 class Config:
@@ -12,6 +22,8 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     DB_PATH = BASE_DIR / "memoria.db"
+    SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "False").lower() == "true"
+    SESSION_COOKIE_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
 
     @classmethod
     def validate(cls) -> None:
