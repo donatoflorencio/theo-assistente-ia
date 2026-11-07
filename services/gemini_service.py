@@ -1,5 +1,6 @@
 import difflib
 import re
+import sqlite3
 import unicodedata
 
 from db import get_connection
@@ -58,7 +59,7 @@ def atualizar_memoria(memoria_id, novo_conteudo):
 
 def buscar_memoria_por_categoria(categoria):
     with get_connection() as conexao:
-        conexao.row_factory = __import__("sqlite3").Row
+        conexao.row_factory = sqlite3.Row
 
         resultado = conexao.execute(
             """
@@ -120,7 +121,7 @@ def buscar_memorias_relacionadas(texto):
 
 def listar_memorias():
     with get_connection() as conexao:
-        conexao.row_factory = __import__("sqlite3").Row
+        conexao.row_factory = sqlite3.Row
         memorias = conexao.execute(
             """
             SELECT id, categoria, conteudo, criado_em
